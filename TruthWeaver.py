@@ -1,0 +1,323 @@
+import streamlit as st
+import streamlit.components.v1 as components
+import os
+
+HTML_CHAT_INTERFACE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TruthWeaverj</title>
+    <link rel="icon"  href="https://drive.google.com/file/d/1rd5TwqUrWvjdop1lwRXpTRGUc50PnzQ3/view?usp=drive_link" type="image/x-icon">
+    <!-- Loading Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom scrollbar styling for a cleaner look */
+        #chat-window::-webkit-scrollbar {
+            width: 8px;
+        }
+        #chat-window::-webkit-scrollbar-thumb {
+            background-color: #cbd5e1; /* slate-300 */
+            border-radius: 4px;
+        }
+        #chat-window::-webkit-scrollbar-track {
+            background-color: #f1f5f9; /* slate-100 */
+        }
+
+        /* Set Inter font */
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+
+        /* Ensure smooth transition for button hover effects */
+        .btn-send {
+            transition: background-color 0.3s, transform 0.1s;
+        }
+        .btn-send:hover {
+            transform: translateY(-1px);
+        }
+        .btn-send:active {
+            transform: translateY(1px);
+        }
+    </style>
+</head>
+<body class="bg-gray-50 flex flex-col h-screen antialiased">
+
+    <!-- Main Chat Container -->
+    <div class="flex flex-col flex-1 max-w-4xl w-full mx-auto p-4 sm:p-6 lg:p-8">
+        
+        <!-- Header -->
+        <header class="text-center mb-6">
+            <h1 class="text-3xl font-extrabold text-gray-900 flex items-center justify-center">
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 mr-2 text-indigo-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 14h-2a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2zM12 10h-2M12 14h-2"/></svg>
+                TruthWeaver
+            </h1>
+            <p class="text-sm text-gray-500">A conversational interface powered by Google's Gemini.</p>
+        </header>
+
+        <!-- Chat History Window -->
+        <div id="chat-window" class="flex-1 bg-white border border-gray-200 rounded-xl shadow-lg p-4 overflow-y-auto mb-4">
+            <!-- Initial Message -->
+            <div class="flex justify-start mb-4">
+                <div class="flex-shrink-0 mr-3">
+                    <div class="h-8 w-8 rounded-full bg-indigo-500 text-white flex items-center justify-center text-sm font-semibold">AI</div>
+                </div>
+                <div class="max-w-xs sm:max-w-md lg:max-w-lg">
+                    <div class="bg-indigo-100 text-gray-800 p-3 rounded-xl rounded-tl-none shadow-sm">
+                        Hello! I'm TruthWeaver, your AI Powered News Detector if the news is true or not. How can I help you today for detecting news?
+                    </div>
+                </div>
+            </div>
+            <!-- Messages will be injected here by JavaScript -->
+        </div>
+
+        <!-- Input Area (Fixed at Bottom) -->
+        <div class="bg-white p-4 border border-gray-200 rounded-xl shadow-lg flex items-center">
+            <textarea
+                id="user-input"
+                class="flex-1 resize-none border-none focus:outline-none p-2 text-gray-700 h-10 overflow-hidden"
+                rows="1"
+                placeholder="Message TruthWeaver..."
+                oninput="adjustHeight(this)"
+                onkeydown="handleKeyDown(event)"
+            ></textarea>
+            
+            <button id="send-btn" onclick="sendMessage()" class="btn-send ml-3 p-2 bg-indigo-600 text-white rounded-full shadow-lg hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed" title="Send Message (Shift+Enter for newline)">
+                <!-- Send Icon (Lucide-style inline SVG) -->
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+                </svg>
+            </button>
+        </div>
+        
+        <!-- Loading Indicator -->
+        <div id="loading-indicator" class="hidden text-center mt-2 text-sm text-indigo-600 font-medium">
+            Thinking...
+            <span class="inline-block ml-1 animate-pulse">...</span>
+        </div>
+
+    </div>
+
+    <script>
+        // --- Firebase/Gemini API Setup (Mandatory Globals) ---
+        const apiKey = "AIzaSyBq3mRz46QKDFXpShE3sIqzyYnEacQu-yU"; 
+        const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+
+        // Chat state: Stores the conversation history for context
+        let chatHistory = [];
+
+        const chatWindow = document.getElementById('chat-window');
+        const userInput = document.getElementById('user-input');
+        const sendButton = document.getElementById('send-btn');
+        const loadingIndicator = document.getElementById('loading-indicator');
+
+        /**
+         * Dynamically adjusts the height of the textarea based on its content.
+         * @param {HTMLTextAreaElement} element - The textarea element.
+         */
+        function adjustHeight(element) {
+            element.style.height = 'auto';
+            element.style.height = (element.scrollHeight) + 'px';
+            // Limit max height for UX
+            if (element.scrollHeight > 150) {
+                element.style.overflowY = 'auto';
+                element.style.height = '150px';
+            } else {
+                element.style.overflowY = 'hidden';
+            }
+        }
+
+        /**
+         * Handles keyboard events for the input field (Enter to send, Shift+Enter for newline).
+         * @param {KeyboardEvent} event 
+         */
+        function handleKeyDown(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault(); // Prevents adding a newline
+                sendMessage();
+            }
+        }
+
+        /**
+         * Scrolls the chat window to the bottom.
+         */
+        function scrollToBottom() {
+            chatWindow.scrollTop = chatWindow.scrollHeight;
+        }
+
+        /**
+         * Renders a message bubble in the chat window.
+         * @param {string} text - The content of the message.
+         * @param {string} role - The role ('user' or 'model').
+         */
+        function renderMessage(text, role) {
+            // Sanitize text for display, replacing newlines with <br>
+            const sanitizedText = text.replace(/\n/g, '<br>');
+
+            const wrapper = document.createElement('div');
+            wrapper.className = `flex mb-4 ${role === 'user' ? 'justify-end' : 'justify-start'}`;
+
+            const avatarContainer = document.createElement('div');
+            const messageContainer = document.createElement('div');
+            messageContainer.className = `max-w-xs sm:max-w-md lg:max-w-lg`;
+
+            const messageBubble = document.createElement('div');
+            messageBubble.innerHTML = sanitizedText; // Use innerHTML to respect <br>
+
+            if (role === 'user') {
+                // User message (Right-aligned)
+                avatarContainer.className = 'flex-shrink-0 ml-3';
+                avatarContainer.innerHTML = '<div class="h-8 w-8 rounded-full bg-indigo-600 text-white flex items-center justify-center text-sm font-semibold">You</div>';
+                
+                messageBubble.className = 'bg-indigo-600 text-white p-3 rounded-xl rounded-br-none shadow-md';
+                
+                messageContainer.appendChild(messageBubble);
+                wrapper.appendChild(messageContainer);
+                wrapper.appendChild(avatarContainer);
+
+            } else {
+                // AI message (Left-aligned)
+                avatarContainer.className = 'flex-shrink-0 mr-3';
+                avatarContainer.innerHTML = '<div class="h-8 w-8 rounded-full bg-indigo-500 text-white flex items-center justify-center text-sm font-semibold">AI</div>';
+                
+                messageBubble.className = 'bg-gray-200 text-gray-800 p-3 rounded-xl rounded-tl-none shadow-md';
+                
+                messageContainer.appendChild(messageBubble);
+                wrapper.appendChild(avatarContainer);
+                wrapper.appendChild(messageContainer);
+            }
+
+            chatWindow.appendChild(wrapper);
+            scrollToBottom();
+        }
+
+        /**
+         * Calls the Gemini API with exponential backoff retry logic.
+         * @param {object} payload - The request payload.
+         * @param {number} maxRetries - Maximum number of retries.
+         * @param {number} delay - Initial delay in milliseconds.
+         * @returns {Promise<object>} The JSON response from the API.
+         */
+        async function callGeminiAPI(payload, maxRetries = 5, delay = 1000) {
+            for (let i = 0; i < maxRetries; i++) {
+                try {
+                    const response = await fetch(API_URL, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (response.ok) {
+                        return await response.json();
+                    } else if (response.status === 429 || response.status >= 500) {
+                        // Rate limit or server error - retry
+                        if (i < maxRetries - 1) {
+                            await new Promise(resolve => setTimeout(resolve, delay * Math.pow(2, i)));
+                            continue;
+                        }
+                    }
+                    throw new Error(`API call failed with status: ${response.status}`);
+
+                } catch (error) {
+                    if (i < maxRetries - 1) {
+                        await new Promise(resolve => setTimeout(resolve, delay * Math.pow(2, i)));
+                        continue;
+                    }
+                    throw new Error(`API error after all retries: ${error.message}`);
+                }
+            }
+        }
+
+        /**
+         * Main function to send the message, call the API, and update the UI.
+         */
+        async function sendMessage() {
+            const userMessage = userInput.value.trim();
+            if (!userMessage) return;
+
+            // 1. Disable input and show loading state
+            userInput.value = '';
+            adjustHeight(userInput);
+            userInput.disabled = true;
+            sendButton.disabled = true;
+            loadingIndicator.classList.remove('hidden');
+
+            // 2. Add user message to history and render it
+            chatHistory.push({ role: "user", parts: [{ text: userMessage }] });
+            renderMessage(userMessage, 'user');
+
+            try {
+                // 3. Construct API payload with full history
+                const payload = {
+                    contents: chatHistory,
+                };
+                
+                // 4. Call the API with retry logic
+                const result = await callGeminiAPI(payload);
+                
+                const candidate = result.candidates?.[0];
+
+                if (candidate && candidate.content?.parts?.[0]?.text) {
+                    const modelResponse = candidate.content.parts[0].text;
+                    
+                    // 5. Add model response to history and render it
+                    chatHistory.push({ role: "model", parts: [{ text: modelResponse }] });
+                    renderMessage(modelResponse, 'model');
+                } else {
+                    renderMessage("I'm sorry, I couldn't get a response. Please try again.", 'model');
+                }
+
+            } catch (error) {
+                console.error("Gemini API Error:", error);
+                renderMessage(`An unexpected error occurred: ${error.message}`, 'model');
+
+            } finally {
+                // 6. Re-enable input and hide loading state
+                userInput.disabled = false;
+                sendButton.disabled = false;
+                loadingIndicator.classList.add('hidden');
+                userInput.focus();
+            }
+        }
+    </script>
+</body>
+</html>
+"""
+
+st.set_page_config(layout="wide")
+st.markdown("""
+    <style>
+        /* Hide the default Streamlit header/footer/menu to make the embedded app look clean */
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+        header {visibility: hidden;}
+
+        /* Ensure the entire Streamlit container uses full width/height */
+        .stApp {
+            margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        /* Adjust the block container to fill the screen */
+        .block-container {
+            padding: 0;
+            margin: 0;
+            max-width: 100vw !important;
+            height: 100vh;
+        }
+
+        /* Set the background of the Streamlit page itself to match the app */
+        body {
+            background-color: #f9fafb !important; /* Matches the Tailwind bg-gray-50 */
+        }
+    </style>
+""", unsafe_allow_html=True)
+
+components.html(
+    HTML_CHAT_INTERFACE,
+    height=800, 
+    scrolling=False 
+)
